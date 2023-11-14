@@ -1,1 +1,1 @@
-# automation-challenge-brno
+# Automation - Challenge 3
