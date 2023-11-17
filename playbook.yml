@@ -81,11 +81,11 @@
       ansible.builtin.shell: rpm -qa | grep -e '\.el[8]'
       changed_when: false
       register: rhel8_remove
-      when: ansible_facts['distribution_version'] == "9.2"
+      when: ansible_facts['distribution_version'] == "9.3"
 
     - name: Remove RHEL8 remaining packages.
       ansible.builtin.dnf:
         name: "{{ item }}"
         state: absent
       loop: "{{ rhel8_remove.stdout_lines }}"
-      when: ansible_facts['distribution_version'] == "9.2"
+      when: ansible_facts['distribution_version'] == "9.3"
