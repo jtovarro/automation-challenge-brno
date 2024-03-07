@@ -1,0 +1,91 @@
+---
+- name: In-Place Upgrade servers
+  hosts: all
+  become: true
+  tasks:
+    - name: Print the current OS.
+      ansible.builtin.debug:
+        var: ansible_facts['distribution_version']
+
+    - name: Enable repositories. These repositories allow the automation to install the necessary packages.
+      community.general.rhsm_repository:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rhel-8-for-x86_64-baseos-rpms
+        - rhel-8-for-x86_64-appstream-rpms
+
+    - name: Remove packages from the exclude list. This allows to remove the RHEL7 Leapp tool if previously installed, as it can conflict with the RHEL8 Leapp tool.
+      ansible.builtin.command: yum config-manager --save --setopt exclude=''
+      changed_when: false
+
+    - name: Register RHEL7 dependencies and packages to be removed.
+      ansible.builtin.shell: rpm -qa | grep -e '\.el[67]' | grep -vE '^(gpg-pubkey|libmodulemd|katello-ca-consumer)' | sort
+      changed_when: false
+      register: rhel7_remove
+
+    - name: Remove RHEL7 Leapp tool packages and dependencies.
+      ansible.builtin.dnf:
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ rhel7_remove.stdout_lines }}"
+
+    - name: Update all packages to the latest version.
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+
+    - name: Install the RHEL8 Leapp tool and NetworkManager.
+      ansible.builtin.dnf:
+        name:
+          - leapp-upgrade
+          - NetworkManager
+        state: present
+
+    - name: Start and enable NetworkManager.
+      ansible.builtin.service:
+        name: NetworkManager
+        state: started
+        enabled: true
+
+    - name: Execute the Preupgrade Analysis. This report allows checking if an inhibitor could block the upgrade, the report is stored in /var/log/leapp/leapp-report.txt at target host. It takes 3 min approx.
+      ansible.builtin.command: leapp preupgrade
+      register: preupgrade_analysis
+
+    - name: Launch Leapp upgrade. This task can take up to 10 minutes.
+      ansible.builtin.command: leapp upgrade
+
+    - name: Make sure lines at ~/.ssh/know_hosts in your local machine containing the target hostname are removed. This action avoids possible failures when executing Ansible tasks on a recently upgraded system with ssh connection established before the upgrade.
+      ansible.builtin.lineinfile:
+        path: ~/.ssh/known_hosts
+        regexp: '^{{ inventory_hostname }}'
+        state: absent
+      delegate_to: localhost
+
+    - name: Reboot to apply the upgrade configurations. This task can take up to 15 min.
+      ansible.builtin.reboot:
+        reboot_timeout: 3600
+
+    - name: Update facts. Refreshing Ansible facts is a must, as they probably change after the upgrade.
+      ansible.builtin.setup:
+
+    - name: Print message. In-Place Upgrade finished successfully.
+      ansible.builtin.debug:
+        msg: "Server has been upgraded to {{ ansible_facts['distribution_version'] }}"
+
+    - name: Remove packages from the exclude list. This allow to remove the RHEL8 Leapp tool.
+      ansible.builtin.command: yum config-manager --save --setopt exclude=''
+      changed_when: false
+
+    - name: Register RHEL8 packages to be removed. Packages stored in this task were either in the exclude list or could not be upgraded to RHEL9.
+      ansible.builtin.shell: rpm -qa | grep -e '\.el[8]'
+      changed_when: false
+      register: rhel8_remove
+      when: ansible_facts['distribution_version'] == "9.3"
+
+    - name: Remove RHEL8 remaining packages.
+      ansible.builtin.dnf:
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ rhel8_remove.stdout_lines }}"
+      when: ansible_facts['distribution_version'] == "9.3"
